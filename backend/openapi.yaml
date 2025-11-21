@@ -1,0 +1,6 @@
+
+openapi: 3.0.3
+info:
+  title: Craighead Building Supplies API
+  version: 1.0.0
+  description: Backend API for catalogue and trade enquiries.
