@@ -1,9 +1,9 @@
+import ContactPage from "./components/ContactPage.jsx";
 import React from "react";
 import EnquiryPanel from "./components/EnquiryPanel.jsx";
 import MissionStatement from "./components/MissionStatement.jsx";
 import PaslodeHighlight from "./components/PaslodeHighlight.jsx";
 import TradeCounterPanel from "./components/TradeCounterPanel.jsx";
-import ContactPage from "./pages/ContactPage.jsx";
 
 export default function App() {
   return (
@@ -21,7 +21,7 @@ export default function App() {
             <button aria-label="Search">🔍</button>
           </div>
         </header>
-
+         
         <main>
           <section className="cb-hero">
             <div className="cb-hero__content">
@@ -34,6 +34,7 @@ export default function App() {
             </div>
             <div className="cb-hero__image"></div>
           </section>
+        
 
           <MissionStatement />
 
