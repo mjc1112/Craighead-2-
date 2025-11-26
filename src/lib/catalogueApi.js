@@ -27,6 +27,7 @@ export async function getProducts({ categorySlug, limit = 48, page = 1 } = {}) {
       name,
       sku,
       description,
+      image_url,
       is_active,
       categories!inner (slug, name),
       brands (name)
@@ -57,6 +58,7 @@ export async function getProductById(id) {
       name,
       sku,
       description,
+      image_url,
       is_active,
       categories (id, slug, name),
       brands (id, name)
