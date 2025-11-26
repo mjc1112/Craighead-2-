@@ -1,9 +1,9 @@
-
 import React from "react";
-import { MissionStatement } from "./components/MissionStatement.jsx";
-import { PaslodeHighlight } from "./components/PaslodeHighlight.jsx";
-import { EnquiryProvider } from "./context/EnquiryContext.jsx";
-import { EnquiryPanel } from "./components/EnquiryPanel.jsx";
+import EnquiryPanel from "./components/EnquiryPanel.jsx";
+import MissionStatement from "./components/MissionStatement.jsx";
+import PaslodeHighlight from "./components/PaslodeHighlight.jsx";
+import TradeCounterPanel from "./components/TradeCounterPanel.jsx";
+import ContactPage from "./pages/ContactPage.jsx";
 
 export default function App() {
   return (
@@ -88,7 +88,7 @@ export default function App() {
           </div>
         </footer>
 
-        <EnquiryPanel />
+        <ContactPage />
       </div>
     </EnquiryProvider>
   );
