@@ -122,6 +122,16 @@ function ProductCatalogue() {
       <div className="cb-product-grid">
         {filteredProducts.map(product => (
           <article key={product.id} className="cb-product-card">
+                    {product.image_url && (
+          <div className="cb-product-card__image">
+            <img
+              src={product.image_url}
+              alt={product.name || product.sku}
+              loading="lazy"
+            />
+          </div>
+        )}
+
             <h3 className="cb-product-card__title">{product.name}</h3>
             <p className="cb-product-card__meta">
               <span>{indexedBrands[product.brand_id] || 'Unknown brand'}</span>
