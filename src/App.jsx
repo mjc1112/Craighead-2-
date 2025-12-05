@@ -1,3 +1,5 @@
+import ProductCatalogue from "./components/ProductCatalogue.jsx";
+import SpecialistServices from "./components/SpecialistServices.jsx";
 import ContactPage from "./pages/ContactPage.jsx";
 import React from "react";
 import EnquiryPanel from "./components/EnquiryPanel.jsx";
