@@ -4,6 +4,7 @@ import EnquiryPanel from "./components/EnquiryPanel.jsx";
 import MissionStatement from "./components/MissionStatement.jsx";
 import PaslodeHighlight from "./components/PaslodeHighlight.jsx";
 import TradeCounterPanel from "./components/TradeCounterPanel.jsx";
+import { EnquiryProvider } from "./context/EnquiryContext.jsx";  // 
 
 export default function App() {
   return (
