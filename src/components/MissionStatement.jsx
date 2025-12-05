@@ -1,7 +1,6 @@
-
 import React from "react";
 
-export function MissionStatement() {
+function MissionStatement() {
   return (
     <section className="cb-section cb-section--mission">
       <div className="cb-section__inner cb-mission">
@@ -15,3 +14,5 @@ export function MissionStatement() {
     </section>
   );
 }
+
+export default MissionStatement;
