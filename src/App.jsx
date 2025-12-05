@@ -1,4 +1,4 @@
-import ContactPage from "./pages/ContactPage.jsx";
+import ContactPage from "../pages/ContactPage.jsx";
 import React from "react";
 import EnquiryPanel from "./components/EnquiryPanel.jsx";
 import MissionStatement from "./components/MissionStatement.jsx";
