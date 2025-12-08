@@ -3,7 +3,7 @@ import ProductCatalogue from "./components/ProductCatalogue.jsx";
 import SpecialistServices from "./components/SpecialistServices.jsx";
 import ContactPage from "./pages/ContactPage.jsx";
 import React from "react";
-import EnquiryPanel from "./components/EnquiryPanel.jsx";
+import { EnquiryPanel } from "./components/EnquiryPanel.jsx";
 import MissionStatement from "./components/MissionStatement.jsx";
 import PaslodeHighlight from "./components/PaslodeHighlight.jsx";
 import TradeCounterPanel from "./components/TradeCounterPanel.jsx";
