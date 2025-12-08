@@ -1,6 +1,6 @@
 // src/App.jsx
-import ProductCatalogue from "./components/ProductCatalogue.jsx";
-import SpecialistServices from "./components/SpecialistServices.jsx";
+import ProductCatalogue from "./components/src/components/ProductCatalogue.jsx";
+import SpecialistServices from "./components/src/components/SpecialistServices.jsx";
 import ContactPage from "./pages/ContactPage.jsx";
 import React from "react";
 import EnquiryPanel from "./components/EnquiryPanel.jsx";
