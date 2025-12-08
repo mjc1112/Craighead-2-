@@ -14,10 +14,12 @@ export default function ProductCatalogue() {
         setLoading(true);
         setError(null);
 
-        const { data, error } = await supabase
-          .from("products") 
-          .select("id, name, description, brand, category, price, image_url")
-          .order("name", { ascending: true });
+      const { data, error } = await supabase
+  .from("products")
+  .select("id, name, description, sku, image_url, category_id, brand_id, is_active")
+  .eq("is_active", true)
+  .order("name", { ascending: true });
+
 
         if (error) throw error;
 
