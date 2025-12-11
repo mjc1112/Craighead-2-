@@ -1,46 +1,51 @@
 // src/components/ProductCatalogue.jsx
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import supabase from "../lib/supabaseClient";
 
-const PAGE_SIZE = 24; // products per page
+const PAGE_SIZE = 36; // products per page
 
 export default function ProductCatalogue() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedCategoryId, setSelectedCategoryId] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
 
-  // --- LOAD DATA FROM SUPABASE ---
+  // --------------------------------------------------
+  // Load products + categories from Supabase
+  // --------------------------------------------------
   useEffect(() => {
     async function loadData() {
-      setLoading(true);
-      setError(null);
-
       try {
-        // 1) Categories
-        const { data: categoryData, error: categoryError } = await supabase
-          .from("categories")
-          .select("id, name")
-          .order("name", { ascending: true });
+        setLoading(true);
+        setError(null);
 
-        if (categoryError) throw categoryError;
-        setCategories(categoryData || []);
-
-        // 2) Products
-        const { data: productData, error: productError } = await supabase
-          .from("products")
-          .select(
-            "id, name, description, sku, image_url, category_id, brand_id, is_active"
-          )
-          .eq("is_active", true)
-          .order("name", { ascending: true });
+        const [
+          { data: productData, error: productError },
+          { data: categoryData, error: categoryError },
+        ] = await Promise.all([
+          supabase
+            .from("products")
+            .select(
+              "id, name, description, sku, image_url, category_id, brand_id, is_active"
+            )
+            .eq("is_active", true)
+            .order("name", { ascending: true }),
+          supabase
+            .from("categories")
+            .select("id, name")
+            .order("name", { ascending: true }),
+        ]);
 
         if (productError) throw productError;
-        setProducts(productData || []);
+        if (categoryError) throw categoryError;
+
+        setProducts(productData ?? []);
+        setCategories(categoryData ?? []);
       } catch (err) {
         console.error("Error loading catalogue:", err);
         setError("We couldn’t load the catalogue at this time.");
@@ -52,94 +57,124 @@ export default function ProductCatalogue() {
     loadData();
   }, []);
 
-  // Reset page when filters change
+  // Reset to page 1 when filters change
   useEffect(() => {
     setPage(1);
-  }, [selectedCategory, searchTerm]);
+  }, [selectedCategoryId, searchTerm]);
 
-  // --- FILTER + SEARCH ---
+  // --------------------------------------------------
+  // Filtering + search
+  // --------------------------------------------------
   const filteredProducts = useMemo(() => {
     let list = [...products];
 
-    if (selectedCategory !== "all") {
-      const categoryId = Number(selectedCategory);
-      list = list.filter((p) => p.category_id === categoryId);
+    // Filter by category
+    if (selectedCategoryId !== "all") {
+      const idNum = Number(selectedCategoryId);
+      list = list.filter((p) => p.category_id === idNum);
     }
 
-    if (searchTerm.trim()) {
-      const q = searchTerm.trim().toLowerCase();
+    // Text search (name, SKU, description)
+    const term = searchTerm.trim().toLowerCase();
+    if (term.length > 0) {
       list = list.filter((p) => {
+        const name = (p.name || "").toLowerCase();
+        const sku = (p.sku || "").toLowerCase();
+        const desc = (p.description || "").toLowerCase();
         return (
-          (p.name && p.name.toLowerCase().includes(q)) ||
-          (p.description && p.description.toLowerCase().includes(q)) ||
-          (p.sku && p.sku.toLowerCase().includes(q))
+          name.includes(term) || sku.includes(term) || desc.includes(term)
         );
       });
     }
 
     return list;
-  }, [products, selectedCategory, searchTerm]);
+  }, [products, selectedCategoryId, searchTerm]);
 
-  // --- PAGINATION ---
-  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pageSliceStart = (safePage - 1) * PAGE_SIZE;
-  const pageSliceEnd = pageSliceStart + PAGE_SIZE;
-  const pageProducts = filteredProducts.slice(pageSliceStart, pageSliceEnd);
+  // --------------------------------------------------
+  // Pagination
+  // --------------------------------------------------
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredProducts.length / PAGE_SIZE)
+  );
+  const currentPage = Math.min(page, totalPages);
+  const startIndex = (currentPage - 1) * PAGE_SIZE;
+  const pageProducts = filteredProducts.slice(
+    startIndex,
+    startIndex + PAGE_SIZE
+  );
 
-  // --- RENDER STATES ---
+  const handlePrevPage = () => {
+    setPage((p) => Math.max(1, p - 1));
+  };
+
+  const handleNextPage = () => {
+    setPage((p) => Math.min(totalPages, p + 1));
+  };
+
+  // --------------------------------------------------
+  // Render states
+  // --------------------------------------------------
   if (loading) {
     return (
-      <section className="cb-section" aria-busy="true">
-        <p>Loading products…</p>
+      <section className="cb-section" aria-label="Product catalogue loading">
+        <div className="cb-section_inner">
+          <p>Loading products…</p>
+        </div>
       </section>
     );
   }
 
   if (error) {
     return (
-      <section className="cb-section">
-        <p>{error}</p>
+      <section className="cb-section" aria-label="Product catalogue error">
+        <div className="cb-section_inner">
+          <p>{error}</p>
+        </div>
       </section>
     );
   }
 
-  if (!filteredProducts.length) {
+  if (!products.length) {
     return (
-      <section className="cb-section">
-        <h2 className="cb-mission_title">Product Catalogue</h2>
-        <p>No products matched your filters.</p>
+      <section className="cb-section" aria-label="Empty product catalogue">
+        <div className="cb-section_inner">
+          <h2 className="cb-mission_title">Product Catalogue</h2>
+          <p>No products are available in the catalogue yet.</p>
+        </div>
       </section>
     );
   }
 
-  // --- UI ---
+  // --------------------------------------------------
+  // Main render
+  // --------------------------------------------------
   return (
-    <section className="cb-section" id="catalogue">
+    <section className="cb-section" aria-label="Product catalogue">
       <div className="cb-section_inner">
         <h2 className="cb-mission_title">Product Catalogue</h2>
 
-        {/* Filter + search bar */}
+        {/* Filters */}
         <div className="cb-catalogue-filters">
-          {/* Category selector */}
-          <label className="cb-filter">
-            <span>Category</span>
+          {/* Category filter */}
+          <label className="cb-filter cb-filter--select">
+            <span className="cb-filter_label">Category</span>
             <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
+              value={selectedCategoryId}
+              onChange={(e) => setSelectedCategoryId(e.target.value)}
             >
-              <option value="all">All product types</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+              <option value="all">All categories</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name}
                 </option>
               ))}
             </select>
           </label>
 
           {/* Search */}
-          <label className="cb-filter cb-filter--grow">
-            <span>Search</span>
+          <label className="cb-filter cb-filter--search">
+            <span className="cb-filter_label">Search</span>
             <input
               type="search"
               placeholder="Search by name, SKU or description…"
@@ -148,83 +183,94 @@ export default function ProductCatalogue() {
             />
           </label>
 
-          {/* Results count */}
-          <div className="cb-filter cb-filter--meta">
-            <span>
-              Showing {pageProducts.length} of {filteredProducts.length}{" "}
-              products
-            </span>
+          {/* Count */}
+          <div className="cb-filter cb-filter--count">
+            {filteredProducts.length} product
+            {filteredProducts.length === 1 ? "" : "s"} found
           </div>
         </div>
 
-        {/* Product grid */}
-        <div className="cb-category-grid cb-catalogue-grid">
-          {pageProducts.map((p) => {
-            // Image handling: use DB image if present, otherwise a placeholder
-            const imageSrc =
-              p.image_url && p.image_url.trim().length > 0
-                ? p.image_url
-                : "/images/product-placeholder.jpg"; // <- add this file under /public/images
-
-            return (
-              <article
-                key={p.id}
-                className="cb-card cb-card--product"
-                aria-label={p.name}
-              >
-                <div className="cb-card_image">
-                  <img src={imageSrc} alt={p.name} loading="lazy" />
-                </div>
-
-                <div className="cb-card_body">
-                  <h3 className="cb-card_title">{p.name}</h3>
-                  {p.sku && (
-                    <p className="cb-card_sku">
-                      <strong>SKU:</strong> {p.sku}
-                    </p>
-                  )}
-                  {p.description && (
-                    <p className="cb-card_description">{p.description}</p>
-                  )}
-                  <p className="cb-card_meta">
-                    Category ID: {p.category_id} • Brand ID: {p.brand_id}
-                  </p>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-
-        {/* Pagination controls */}
-        {totalPages > 1 && (
-          <div className="cb-pagination">
-            <button
-              type="button"
-              disabled={safePage === 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              ‹ Prev
-            </button>
-
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pNum) => (
-              <button
-                key={pNum}
-                type="button"
-                className={pNum === safePage ? "is-active" : ""}
-                onClick={() => setPage(pNum)}
-              >
-                {pNum}
-              </button>
-            ))}
-
-            <button
-              type="button"
-              disabled={safePage === totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            >
-              Next ›
-            </button>
+        {/* Results grid */}
+        {filteredProducts.length === 0 ? (
+          <div className="cb-catalogue-empty">
+            <p>No products match your filters.</p>
           </div>
+        ) : (
+          <>
+            <div className="cb-category-grid cb-catalogue-grid">
+              {pageProducts.map((p) => {
+                const hasImage =
+                  p.image_url && p.image_url.trim().length > 0;
+
+                const imgSrc = hasImage
+                  ? p.image_url
+                  : "/images/product-placeholder-dark.jpg";
+
+                return (
+                  <article
+                    key={p.id}
+                    className="cb-card cb-card--product cb-card--catalogue"
+                  >
+                    <div className="cb-card_image">
+                      <img
+                        src={imgSrc}
+                        alt={p.name || "Craighead product"}
+                        loading="lazy"
+                      />
+                    </div>
+
+                    <div className="cb-card_body">
+                      <h3 className="cb-card_title">{p.name}</h3>
+
+                      {p.sku && (
+                        <p className="cb-card_sku">
+                          <strong>SKU:</strong> {p.sku}
+                        </p>
+                      )}
+
+                      {p.description && (
+                        <p className="cb-card_description">
+                          {p.description}
+                        </p>
+                      )}
+
+                      <p className="cb-card_meta">
+                        Category ID: {p.category_id}
+                        {p.brand_id && <> · Brand ID: {p.brand_id}</>}
+                      </p>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="cb-pagination">
+                <button
+                  type="button"
+                  className="cb-pagination_btn"
+                  onClick={handlePrevPage}
+                  disabled={currentPage === 1}
+                >
+                  Previous
+                </button>
+
+                <span className="cb-pagination_status">
+                  Page {currentPage} of {totalPages}
+                </span>
+
+                <button
+                  type="button"
+                  className="cb-pagination_btn"
+                  onClick={handleNextPage}
+                  disabled={currentPage === totalPages}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </section>
