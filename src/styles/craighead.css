@@ -378,3 +378,91 @@ a {
   border-top: 1px solid #222;
   padding-top: 8px;
 }
+/* =========================================================
+   PRODUCT CATALOGUE — CARD LAYOUT FIX
+   ========================================================= */
+
+/* Grid container */
+.cb-catalogue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+  align-items: stretch;
+}
+
+/* Card wrapper */
+.cb-card {
+  background: #0f0f0f;
+  border: 1px solid #222;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Image wrapper (support multiple naming styles safely) */
+.cb-card__image,
+.cb-card-image,
+.cb-card_image {
+  width: 100%;
+  height: 200px;
+  background: #111;
+  overflow: hidden;
+}
+
+/* Image itself */
+.cb-card__image img,
+.cb-card-image img,
+.cb-card_image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Card body */
+.cb-card__body,
+.cb-card-body,
+.cb-card_body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+/* Title */
+.cb-card h3 {
+  font-size: 15px;
+  margin: 0 0 6px;
+  color: #fff;
+}
+
+/* SKU */
+.cb-card-sku {
+  font-size: 12px;
+  color: #b5b5b5;
+  margin-bottom: 6px;
+}
+
+/* Description */
+.cb-card-description {
+  font-size: 13px;
+  color: #cfcfcf;
+  line-height: 1.4;
+  flex-grow: 1;
+}
+
+/* Meta line */
+.cb-card-meta {
+  font-size: 12px;
+  color: #999;
+  border-top: 1px solid #222;
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+/* Placeholder image safety */
+.cb-card__image img[src*="product-placeholder-dark"] {
+  object-fit: cover;
+}
