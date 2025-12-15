@@ -466,3 +466,86 @@ a {
 .cb-card__image img[src*="product-placeholder-dark"] {
   object-fit: cover;
 }
+/* =========================================
+   PRODUCT CATALOGUE CARD FIX (matches JSX)
+   ========================================= */
+
+.cb-catalogue-grid.cb-catalogue-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 1200px) {
+  .cb-catalogue-grid.cb-catalogue-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .cb-catalogue-grid.cb-catalogue-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .cb-catalogue-grid.cb-catalogue-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Card layout */
+.cb-card.cb-card--product {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Image container (IMPORTANT: matches cb-card_image in JSX) */
+.cb-card_image {
+  width: 100%;
+  height: 160px;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1e1e1e;
+  overflow: hidden;
+}
+
+.cb-card_image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+/* Body container (IMPORTANT: matches cb-card_body in JSX) */
+.cb-card_body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 14px;
+  min-height: 160px;
+}
+
+.cb-card_title {
+  font-size: 14px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+/* Prevent descriptions from making cards different heights */
+.cb-card_description {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Meta line stays at bottom */
+.cb-card_meta {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid #1e1e1e;
+  opacity: 0.85;
+}
