@@ -11,13 +11,12 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
 
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-
   const [page, setPage] = useState(1);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Prevent repeatedly re-applying the same preset on re-renders
+  // Prevent re-applying the same preset repeatedly
   const lastAppliedPresetRef = useRef("");
 
   // ---------------------------
@@ -31,7 +30,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
       setError("");
 
       try {
-        // 1) Categories
+        // Categories: id, name
         const { data: catData, error: catErr } = await supabase
           .from("categories")
           .select("id, name")
@@ -39,13 +38,10 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
 
         if (catErr) throw catErr;
 
-        // 2) Products
-        // Keep the select flexible (if some fields don't exist, Supabase will error),
-        // so we choose the most likely fields used in this repo.
+        // Products: ONLY the columns we can see exist in your screenshot
         const { data: prodData, error: prodErr } = await supabase
           .from("products")
-          .select("id, name, description, image_url, sku, price, category_id, brand_id, is_active")
-          .eq("is_active", true)
+          .select("id, category_id, brand_id, name, sku")
           .order("name", { ascending: true });
 
         if (prodErr) throw prodErr;
@@ -55,8 +51,8 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
         setCategories(Array.isArray(catData) ? catData : []);
         setProducts(Array.isArray(prodData) ? prodData : []);
       } catch (e) {
-        if (!isMounted) return;
         console.error("Error loading catalogue:", e);
+        if (!isMounted) return;
         setError("Could not load the catalogue at this time.");
       } finally {
         if (!isMounted) return;
@@ -77,14 +73,13 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     if (!presetCategoryName) return;
     if (!categories || categories.length === 0) return;
 
-    // Avoid repeating the same preset
     if (lastAppliedPresetRef.current === presetCategoryName) return;
     lastAppliedPresetRef.current = presetCategoryName;
 
     const needle = String(presetCategoryName).trim().toLowerCase();
 
-    // Prefer exact match first, then "includes"
-    let match =
+    // Exact match, then includes
+    const match =
       categories.find((c) => String(c.name || "").trim().toLowerCase() === needle) ||
       categories.find((c) => String(c.name || "").toLowerCase().includes(needle));
 
@@ -93,7 +88,6 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
       setPage(1);
     }
 
-    // Tell App.jsx we've consumed it so it can clear presetCategoryName
     if (typeof onPresetConsumed === "function") {
       onPresetConsumed();
     }
@@ -120,9 +114,8 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
 
       const name = String(p.name || "").toLowerCase();
       const sku = String(p.sku || "").toLowerCase();
-      const desc = String(p.description || "").toLowerCase();
 
-      return name.includes(q) || sku.includes(q) || desc.includes(q);
+      return name.includes(q) || sku.includes(q);
     });
   }, [products, selectedCategory, searchTerm]);
 
@@ -134,23 +127,6 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     const end = start + PAGE_SIZE;
     return filteredProducts.slice(start, end);
   }, [filteredProducts, safePage]);
-
-  // ---------------------------
-  // Helpers
-  // ---------------------------
-  function formatPrice(value) {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return "";
-    return `£${num.toFixed(2)}`;
-  }
-
-  function getImageSrc(p) {
-    const url = (p?.image_url || "").trim();
-    if (url) return url;
-
-    // Your repo includes: public/images/product-placeholder-dark.jpg
-    return "/images/product-placeholder-dark.jpg";
-  }
 
   // ---------------------------
   // Render states
@@ -210,7 +186,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
               id="cbSearch"
               type="search"
               value={searchTerm}
-              placeholder="Search by name, SKU or description…"
+              placeholder="Search by name or SKU…"
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
@@ -230,42 +206,29 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
           </div>
         ) : (
           <div className="cb-catalogue-grid">
-            {pageItems.map((p) => {
-              const imgSrc = getImageSrc(p);
-              const price = formatPrice(p.price);
+            {pageItems.map((p) => (
+              <article className="cb-card" key={p.id}>
+                {/* Placeholder image only (until you add image_url support via products or variants) */}
+                <div className="cb-card__image">
+                  <img
+                    src="/images/product-placeholder-dark.jpg"
+                    alt={p?.name || "Product"}
+                    loading="lazy"
+                  />
+                </div>
 
-              return (
-                <article className="cb-card" key={p.id}>
-                  <div className="cb-card__image">
-                    <img
-                      src={imgSrc}
-                      alt={p?.name || "Product"}
-                      loading="lazy"
-                      onError={(e) => {
-                        e.currentTarget.src = "/images/product-placeholder-dark.jpg";
-                      }}
-                    />
+                <div className="cb-card__body">
+                  <h3 className="cb-card-title">{p?.name}</h3>
+
+                  {p?.sku ? <div className="cb-card-sku">SKU: {p.sku}</div> : null}
+
+                  <div className="cb-card-meta">
+                    Category ID: {String(p?.category_id ?? "-")}
+                    {p?.brand_id != null ? ` · Brand ID: ${String(p.brand_id)}` : ""}
                   </div>
-
-                  <div className="cb-card__body">
-                    <h3 className="cb-card-title">{p?.name}</h3>
-
-                    {p?.sku ? <div className="cb-card-sku">SKU: {p.sku}</div> : null}
-
-                    {price ? <div className="cb-card-price">{price}</div> : null}
-
-                    {p?.description ? (
-                      <p className="cb-card-description">{p.description}</p>
-                    ) : null}
-
-                    <div className="cb-card-meta">
-                      Category ID: {String(p?.category_id ?? "-")}
-                      {p?.brand_id != null ? ` · Brand ID: ${String(p.brand_id)}` : ""}
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
+                </div>
+              </article>
+            ))}
           </div>
         )}
 
