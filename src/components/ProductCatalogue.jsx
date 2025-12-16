@@ -13,9 +13,11 @@ function resolveCategoryId(categories, preset) {
   const key = normaliseKey(preset);
   if (!key) return null;
 
+  // Prefer slug match (best practice)
   const bySlug = categories.find((c) => normaliseKey(c.slug) === key);
   if (bySlug) return bySlug.id;
 
+  // Backwards compatible: name match
   const byName = categories.find((c) => normaliseKey(c.name) === key);
   if (byName) return byName.id;
 
@@ -36,8 +38,8 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
   const [products, setProducts] = useState([]);
   const [page, setPage] = useState(1);
 
-  // Consume preset exactly once
-  const presetConsumedRef = useRef(false);
+  // Track the last preset we applied so button clicks work repeatedly
+  const lastAppliedPresetKeyRef = useRef("");
 
   // Load categories + brands once
   useEffect(() => {
@@ -76,10 +78,9 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     };
   }, []);
 
-  // Decide initial category from presetCategoryName OR localStorage (backwards compatible)
+  // Apply preset whenever it changes (from buttons) or from localStorage once
   useEffect(() => {
     if (!categories.length) return;
-    if (presetConsumedRef.current) return;
 
     const fromStorage = (() => {
       try {
@@ -90,14 +91,34 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     })();
 
     const preset = presetCategoryName || fromStorage;
+    const presetKey = normaliseKey(preset);
+
+    // If nothing to apply and no category selected yet, use first category
+    if (!presetKey) {
+      if (!selectedCategoryId) {
+        setSelectedCategoryId(categories[0]?.id ?? null);
+      }
+      return;
+    }
+
+    // Only act if this preset is new
+    if (lastAppliedPresetKeyRef.current === presetKey) return;
 
     const resolvedId = resolveCategoryId(categories, preset);
     const fallbackId = categories[0]?.id ?? null;
 
-    setSelectedCategoryId(resolvedId || fallbackId);
+    const targetId = resolvedId || fallbackId;
 
-    // IMPORTANT: clear sticky preset so other buttons don’t keep loading same category
-    presetConsumedRef.current = true;
+    if (targetId && String(targetId) !== String(selectedCategoryId)) {
+      setSelectedCategoryId(targetId);
+      setSelectedBrandId("all");
+      setQuery("");
+      setPage(1);
+    }
+
+    lastAppliedPresetKeyRef.current = presetKey;
+
+    // Clear sticky localStorage preset once consumed
     try {
       if (fromStorage) localStorage.removeItem("cb_category_name");
     } catch {
@@ -105,7 +126,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     }
 
     if (typeof onPresetConsumed === "function") onPresetConsumed();
-  }, [categories, presetCategoryName, onPresetConsumed]);
+  }, [categories, presetCategoryName, selectedCategoryId, onPresetConsumed]);
 
   // Load products whenever selectedCategoryId changes
   useEffect(() => {
@@ -190,13 +211,26 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
         ) : null}
 
         {/* Filters */}
-        <div className="cb-catalogue__filters" style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr 2fr", marginTop: 16 }}>
+        <div
+          className="cb-catalogue__filters"
+          style={{
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: "1fr 1fr 2fr",
+            marginTop: 16,
+          }}
+        >
           <div>
             <label style={{ display: "block", marginBottom: 6 }}>Category</label>
             <select
               style={{ width: "100%", padding: 10, borderRadius: 10 }}
               value={selectedCategoryId ?? ""}
-              onChange={(e) => setSelectedCategoryId(Number(e.target.value))}
+              onChange={(e) => {
+                const nextId = Number(e.target.value);
+                setSelectedCategoryId(nextId);
+                // Allow future button presets to apply even if same key was used previously
+                lastAppliedPresetKeyRef.current = "";
+              }}
             >
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -236,7 +270,14 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
 
         {/* Status */}
         {loadError ? (
-          <div style={{ marginTop: 16, padding: 12, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)" }}>
+          <div
+            style={{
+              marginTop: 16,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,0.12)",
+            }}
+          >
             <strong>Catalogue error:</strong> {loadError}
           </div>
         ) : null}
@@ -273,7 +314,12 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
                       <img
                         src={img}
                         alt={p.name || "Product"}
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                          display: "block",
+                        }}
                         onError={(e) => {
                           e.currentTarget.src = FALLBACK_IMG;
                         }}
@@ -282,9 +328,18 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
 
                     <div style={{ padding: 12 }}>
                       <div style={{ fontWeight: 700, lineHeight: 1.2 }}>{p.name}</div>
-                      {p.sku ? <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>{p.sku}</div> : null}
+                      {p.sku ? (
+                        <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>{p.sku}</div>
+                      ) : null}
                       {p.description ? (
-                        <div style={{ opacity: 0.85, marginTop: 10, fontSize: 13, lineHeight: 1.35 }}>
+                        <div
+                          style={{
+                            opacity: 0.85,
+                            marginTop: 10,
+                            fontSize: 13,
+                            lineHeight: 1.35,
+                          }}
+                        >
                           {p.description}
                         </div>
                       ) : null}
@@ -295,7 +350,15 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
             </div>
 
             {/* Pagination */}
-            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "center", marginTop: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                justifyContent: "center",
+                marginTop: 18,
+              }}
+            >
               <button
                 className="cb-btn cb-btn--secondary"
                 type="button"
