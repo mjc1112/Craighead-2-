@@ -577,3 +577,27 @@ a {
 .cb-category-card__label {
   color: #ffffff;
 }
+/* ==================================
+   STAGE 5.2 — Product image proportion
+   ================================== */
+
+/* Ensure product grid items remain consistent */
+.cb-product-card {
+  overflow: hidden;
+}
+
+/* Force a consistent image window */
+.cb-product-img-wrap {
+  width: 100%;
+  aspect-ratio: 4 / 3;   /* change to 1/1 if you want square cards */
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+/* Make the image behave like a product tile */
+.cb-product-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
