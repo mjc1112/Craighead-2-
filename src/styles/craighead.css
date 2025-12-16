@@ -549,3 +549,31 @@ a {
   border-top: 1px solid #1e1e1e;
   opacity: 0.85;
 }
+/* ================================
+   STAGE 5.1 — Button text contrast
+   ================================ */
+
+.cb-btn,
+.cb-btn:visited {
+  color: #ffffff;
+}
+
+.cb-btn--primary,
+.cb-btn--primary:visited {
+  color: #ffffff;
+}
+
+.cb-btn--secondary,
+.cb-btn--secondary:visited {
+  color: #ffffff;
+}
+
+/* Core category buttons (Fixings / Sealants etc.) */
+.cb-category-card,
+.cb-category-card:visited {
+  color: #ffffff;
+}
+
+.cb-category-card__label {
+  color: #ffffff;
+}
