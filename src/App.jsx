@@ -1,5 +1,4 @@
 // src/App.jsx
-
 import React, { useCallback, useState } from "react";
 
 import ProductCatalogue from "./components/ProductCatalogue.jsx";
@@ -12,31 +11,39 @@ import PaslodeHighlight from "./components/PaslodeHighlight.jsx";
 import TradeCounterPanel from "./components/TradeCounterPanel.jsx";
 import { EnquiryProvider } from "./context/EnquiryContext.jsx";
 
-export default function App() {
-  // When a user clicks a CORE PRODUCT RANGE button, we set this.
-  // ProductCatalogue will read it and auto-select the matching category.
-  const [presetCategoryName, setPresetCategoryName] = useState("");
+/**
+ * Stage 5.1 — Standardise on slugs end-to-end
+ * These MUST match Supabase public.categories.slug exactly.
+ */
+const CORE_CATEGORY_SLUGS = {
+  fixings: "fixings",
+  sealantsAdhesives: "sealants-adhesives",
+  powerTools: "power-tools",
+  fireRated: "fire-rated",
+};
 
-  const handleCoreRangeClick = useCallback((categoryName) => {
-    // Persist (useful for refresh), but the primary mechanism is the prop below.
+export default function App() {
+  // Stage 5.1: we now pass SLUGS (not names) into ProductCatalogue
+  const [presetCategorySlug, setPresetCategorySlug] = useState("");
+
+  const handleCoreRangeClick = useCallback((categorySlug) => {
+    // Persist (useful for refresh) – the ProductCatalogue also consumes this
     try {
-      localStorage.setItem("cb_category_name", categoryName);
+      localStorage.setItem("cb_category_name", categorySlug);
     } catch {
       // ignore storage errors (private browsing etc.)
     }
 
-    // Set the live preset for ProductCatalogue to consume
-    setPresetCategoryName(categoryName);
+    setPresetCategorySlug(categorySlug);
 
     // Smooth scroll to catalogue section
     const el = document.getElementById("catalogue");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  // ProductCatalogue should call this after it has applied the preset,
-  // so repeated re-renders don't keep re-applying the same preset.
+  // ProductCatalogue calls this after it has applied the preset
   const handlePresetConsumed = useCallback(() => {
-    setPresetCategoryName("");
+    setPresetCategorySlug("");
   }, []);
 
   return (
@@ -108,7 +115,7 @@ export default function App() {
                 <button
                   type="button"
                   className="cb-category-card"
-                  onClick={() => handleCoreRangeClick("Fixings")}
+                  onClick={() => handleCoreRangeClick(CORE_CATEGORY_SLUGS.fixings)}
                 >
                   <div className="cb-category-card__icon">🧱</div>
                   <div className="cb-category-card__label">Fixings</div>
@@ -117,7 +124,9 @@ export default function App() {
                 <button
                   type="button"
                   className="cb-category-card"
-                  onClick={() => handleCoreRangeClick("Sealants & Adhesives")}
+                  onClick={() =>
+                    handleCoreRangeClick(CORE_CATEGORY_SLUGS.sealantsAdhesives)
+                  }
                 >
                   <div className="cb-category-card__icon">🧴</div>
                   <div className="cb-category-card__label">
@@ -128,7 +137,9 @@ export default function App() {
                 <button
                   type="button"
                   className="cb-category-card"
-                  onClick={() => handleCoreRangeClick("Power Tools")}
+                  onClick={() =>
+                    handleCoreRangeClick(CORE_CATEGORY_SLUGS.powerTools)
+                  }
                 >
                   <div className="cb-category-card__icon">⚡</div>
                   <div className="cb-category-card__label">Power Tools</div>
@@ -137,7 +148,9 @@ export default function App() {
                 <button
                   type="button"
                   className="cb-category-card"
-                  onClick={() => handleCoreRangeClick("Fire Rated Products")}
+                  onClick={() =>
+                    handleCoreRangeClick(CORE_CATEGORY_SLUGS.fireRated)
+                  }
                 >
                   <div className="cb-category-card__icon">🔥</div>
                   <div className="cb-category-card__label">
@@ -151,7 +164,9 @@ export default function App() {
           {/* DYNAMIC PRODUCT CATALOGUE (SUPABASE) */}
           <section id="catalogue" className="cb-section">
             <ProductCatalogue
-              presetCategoryName={presetCategoryName}
+              // Stage 5.1: keep prop name as-is for compatibility,
+              // but it now carries a SLUG value end-to-end.
+              presetCategoryName={presetCategorySlug}
               onPresetConsumed={handlePresetConsumed}
             />
           </section>
