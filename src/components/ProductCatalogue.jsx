@@ -13,16 +13,24 @@ function resolveCategoryId(categories, preset) {
   const key = normaliseKey(preset);
   if (!key) return null;
 
-  // Prefer slug match (best practice)
   const bySlug = categories.find((c) => normaliseKey(c.slug) === key);
   if (bySlug) return bySlug.id;
 
-  // Backwards compatible: name match
   const byName = categories.find((c) => normaliseKey(c.name) === key);
   if (byName) return byName.id;
 
   return null;
 }
+
+const EMPTY_FIXINGS_FILTERS = {
+  length_mm: "",
+  diameter_mm: "",
+  head_type: "",
+  drive_type: "",
+  material: "",
+  finish: "",
+  pack_size: "",
+};
 
 export default function ProductCatalogue({ presetCategoryName, onPresetConsumed }) {
   const [loading, setLoading] = useState(true);
@@ -38,8 +46,20 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
   const [products, setProducts] = useState([]);
   const [page, setPage] = useState(1);
 
-  // Track the last preset we applied so button clicks work repeatedly
-  const lastAppliedPresetKeyRef = useRef("");
+  // Fixings facets
+  const [fixingsFilters, setFixingsFilters] = useState(EMPTY_FIXINGS_FILTERS);
+  const [facetOptions, setFacetOptions] = useState({
+    length_mm: [],
+    diameter_mm: [],
+    head_type: [],
+    drive_type: [],
+    material: [],
+    finish: [],
+    pack_size: [],
+  });
+
+  // Consume preset exactly once
+  const presetConsumedRef = useRef(false);
 
   // Load categories + brands once
   useEffect(() => {
@@ -78,9 +98,10 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     };
   }, []);
 
-  // Apply preset whenever it changes (from buttons) or from localStorage once
+  // Decide initial category from presetCategoryName OR localStorage (backwards compatible)
   useEffect(() => {
     if (!categories.length) return;
+    if (presetConsumedRef.current) return;
 
     const fromStorage = (() => {
       try {
@@ -91,34 +112,14 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     })();
 
     const preset = presetCategoryName || fromStorage;
-    const presetKey = normaliseKey(preset);
-
-    // If nothing to apply and no category selected yet, use first category
-    if (!presetKey) {
-      if (!selectedCategoryId) {
-        setSelectedCategoryId(categories[0]?.id ?? null);
-      }
-      return;
-    }
-
-    // Only act if this preset is new
-    if (lastAppliedPresetKeyRef.current === presetKey) return;
 
     const resolvedId = resolveCategoryId(categories, preset);
     const fallbackId = categories[0]?.id ?? null;
 
-    const targetId = resolvedId || fallbackId;
+    setSelectedCategoryId(resolvedId || fallbackId);
 
-    if (targetId && String(targetId) !== String(selectedCategoryId)) {
-      setSelectedCategoryId(targetId);
-      setSelectedBrandId("all");
-      setQuery("");
-      setPage(1);
-    }
-
-    lastAppliedPresetKeyRef.current = presetKey;
-
-    // Clear sticky localStorage preset once consumed
+    // Clear sticky preset so other buttons don’t keep loading same category
+    presetConsumedRef.current = true;
     try {
       if (fromStorage) localStorage.removeItem("cb_category_name");
     } catch {
@@ -126,9 +127,87 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     }
 
     if (typeof onPresetConsumed === "function") onPresetConsumed();
-  }, [categories, presetCategoryName, selectedCategoryId, onPresetConsumed]);
+  }, [categories, presetCategoryName, onPresetConsumed]);
 
-  // Load products whenever selectedCategoryId changes
+  const selectedCategory = useMemo(() => {
+    return categories.find((c) => String(c.id) === String(selectedCategoryId)) || null;
+  }, [categories, selectedCategoryId]);
+
+  const isFixings = useMemo(() => {
+    return normaliseKey(selectedCategory?.slug) === "fixings";
+  }, [selectedCategory]);
+
+  // Reset fixings facets when leaving Fixings category
+  useEffect(() => {
+    if (!isFixings) setFixingsFilters(EMPTY_FIXINGS_FILTERS);
+  }, [isFixings]);
+
+  // Load facet options for Fixings (distinct values from product_attributes joined to fixings products)
+  useEffect(() => {
+    if (!isFixings) return;
+
+    let isMounted = true;
+
+    async function loadFacetOptions() {
+      try {
+        // Pull the fixings category id
+        const fixingsCatId = selectedCategoryId;
+
+        const { data, error } = await supabase
+          .from("product_attributes")
+          .select(
+            `
+            length_mm, diameter_mm, head_type, drive_type, material, finish, pack_size,
+            products!inner(id, category_id, is_active)
+          `
+          )
+          .eq("products.category_id", fixingsCatId)
+          .eq("products.is_active", true)
+          .limit(5000);
+
+        if (error) throw error;
+        if (!isMounted) return;
+
+        const rows = data || [];
+
+        const uniqSorted = (arr, numeric = false) => {
+          const set = new Set(arr.filter((v) => v !== null && v !== undefined && String(v).trim() !== ""));
+          const out = Array.from(set);
+          if (numeric) return out.map((v) => Number(v)).sort((a, b) => a - b);
+          return out.map((v) => String(v)).sort((a, b) => a.localeCompare(b));
+        };
+
+        setFacetOptions({
+          length_mm: uniqSorted(rows.map((r) => r.length_mm), true),
+          diameter_mm: uniqSorted(rows.map((r) => r.diameter_mm), true),
+          head_type: uniqSorted(rows.map((r) => r.head_type)),
+          drive_type: uniqSorted(rows.map((r) => r.drive_type)),
+          material: uniqSorted(rows.map((r) => r.material)),
+          finish: uniqSorted(rows.map((r) => r.finish)),
+          pack_size: uniqSorted(rows.map((r) => r.pack_size), true),
+        });
+      } catch (e) {
+        // Facets should not break the catalogue; log silently
+        if (!isMounted) return;
+        setFacetOptions({
+          length_mm: [],
+          diameter_mm: [],
+          head_type: [],
+          drive_type: [],
+          material: [],
+          finish: [],
+          pack_size: [],
+        });
+      }
+    }
+
+    loadFacetOptions();
+    return () => {
+      isMounted = false;
+    };
+  }, [isFixings, selectedCategoryId]);
+
+  // Load products whenever selectedCategoryId, brand, or fixings facets change
   useEffect(() => {
     if (!selectedCategoryId) return;
 
@@ -140,14 +219,38 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
       setPage(1);
 
       try {
-        const { data, error } = await supabase
+        // Base select with embedded attributes for Fixings
+        let q = supabase
           .from("products")
-          .select("id, category_id, brand_id, name, sku, description, image_url, is_active")
+          .select(
+            `
+            id, category_id, brand_id, name, sku, description, image_url, is_active,
+            product_attributes(length_mm, diameter_mm, head_type, drive_type, material, finish, pack_size)
+          `
+          )
           .eq("category_id", selectedCategoryId)
           .eq("is_active", true)
           .order("name", { ascending: true })
           .limit(5000);
 
+        if (selectedBrandId !== "all") {
+          q = q.eq("brand_id", Number(selectedBrandId));
+        }
+
+        // Apply Fixings facet filters only when in Fixings
+        if (isFixings) {
+          const f = fixingsFilters;
+
+          if (f.length_mm) q = q.eq("product_attributes.length_mm", Number(f.length_mm));
+          if (f.diameter_mm) q = q.eq("product_attributes.diameter_mm", Number(f.diameter_mm));
+          if (f.head_type) q = q.eq("product_attributes.head_type", f.head_type);
+          if (f.drive_type) q = q.eq("product_attributes.drive_type", f.drive_type);
+          if (f.material) q = q.eq("product_attributes.material", f.material);
+          if (f.finish) q = q.eq("product_attributes.finish", f.finish);
+          if (f.pack_size) q = q.eq("product_attributes.pack_size", Number(f.pack_size));
+        }
+
+        const { data, error } = await q;
         if (error) throw error;
         if (!isMounted) return;
 
@@ -167,23 +270,18 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
     return () => {
       isMounted = false;
     };
-  }, [selectedCategoryId]);
+  }, [selectedCategoryId, selectedBrandId, isFixings, fixingsFilters]);
 
-  const selectedCategory = useMemo(() => {
-    return categories.find((c) => String(c.id) === String(selectedCategoryId)) || null;
-  }, [categories, selectedCategoryId]);
-
+  // Client-side search (name/SKU/description)
   const filteredProducts = useMemo(() => {
     const q = normaliseKey(query);
+    if (!q) return products;
 
     return products.filter((p) => {
-      if (selectedBrandId !== "all" && String(p.brand_id) !== String(selectedBrandId)) return false;
-
-      if (!q) return true;
       const hay = normaliseKey(`${p.name || ""} ${p.sku || ""} ${p.description || ""}`);
       return hay.includes(q);
     });
-  }, [products, query, selectedBrandId]);
+  }, [products, query]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE)), [
     filteredProducts.length,
@@ -210,7 +308,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
           </p>
         ) : null}
 
-        {/* Filters */}
+        {/* Core Filters */}
         <div
           className="cb-catalogue__filters"
           style={{
@@ -225,12 +323,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
             <select
               style={{ width: "100%", padding: 10, borderRadius: 10 }}
               value={selectedCategoryId ?? ""}
-              onChange={(e) => {
-                const nextId = Number(e.target.value);
-                setSelectedCategoryId(nextId);
-                // Allow future button presets to apply even if same key was used previously
-                lastAppliedPresetKeyRef.current = "";
-              }}
+              onChange={(e) => setSelectedCategoryId(Number(e.target.value))}
             >
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -268,16 +361,60 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
           </div>
         </div>
 
+        {/* Fixings Facets */}
+        {isFixings ? (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <strong style={{ opacity: 0.9 }}>Fixings filters</strong>
+              <button
+                type="button"
+                className="cb-btn cb-btn--secondary"
+                onClick={() => setFixingsFilters(EMPTY_FIXINGS_FILTERS)}
+              >
+                Reset fixings filters
+              </button>
+            </div>
+
+            <div
+              style={{
+                marginTop: 10,
+                display: "grid",
+                gap: 10,
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+              }}
+            >
+              {[
+                ["length_mm", "Length (mm)", facetOptions.length_mm, true],
+                ["diameter_mm", "Diameter (mm)", facetOptions.diameter_mm, true],
+                ["head_type", "Head Type", facetOptions.head_type, false],
+                ["drive_type", "Drive Type", facetOptions.drive_type, false],
+                ["material", "Material", facetOptions.material, false],
+                ["finish", "Finish", facetOptions.finish, false],
+                ["pack_size", "Pack Size", facetOptions.pack_size, true],
+              ].map(([key, label, options, numeric]) => (
+                <div key={key}>
+                  <label style={{ display: "block", marginBottom: 6 }}>{label}</label>
+                  <select
+                    style={{ width: "100%", padding: 10, borderRadius: 10 }}
+                    value={fixingsFilters[key]}
+                    onChange={(e) => setFixingsFilters((prev) => ({ ...prev, [key]: e.target.value }))}
+                  >
+                    <option value="">Any</option>
+                    {(options || []).map((v) => (
+                      <option key={String(v)} value={String(v)}>
+                        {numeric ? String(v) : v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {/* Status */}
         {loadError ? (
-          <div
-            style={{
-              marginTop: 16,
-              padding: 12,
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.12)",
-            }}
-          >
+          <div style={{ marginTop: 16, padding: 12, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)" }}>
             <strong>Catalogue error:</strong> {loadError}
           </div>
         ) : null}
@@ -314,12 +451,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
                       <img
                         src={img}
                         alt={p.name || "Product"}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "cover",
-                          display: "block",
-                        }}
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                         onError={(e) => {
                           e.currentTarget.src = FALLBACK_IMG;
                         }}
@@ -328,18 +460,9 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
 
                     <div style={{ padding: 12 }}>
                       <div style={{ fontWeight: 700, lineHeight: 1.2 }}>{p.name}</div>
-                      {p.sku ? (
-                        <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>{p.sku}</div>
-                      ) : null}
+                      {p.sku ? <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>{p.sku}</div> : null}
                       {p.description ? (
-                        <div
-                          style={{
-                            opacity: 0.85,
-                            marginTop: 10,
-                            fontSize: 13,
-                            lineHeight: 1.35,
-                          }}
-                        >
+                        <div style={{ opacity: 0.85, marginTop: 10, fontSize: 13, lineHeight: 1.35 }}>
                           {p.description}
                         </div>
                       ) : null}
@@ -350,15 +473,7 @@ export default function ProductCatalogue({ presetCategoryName, onPresetConsumed 
             </div>
 
             {/* Pagination */}
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                justifyContent: "center",
-                marginTop: 18,
-              }}
-            >
+            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "center", marginTop: 18 }}>
               <button
                 className="cb-btn cb-btn--secondary"
                 type="button"
