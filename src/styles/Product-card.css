@@ -1,0 +1,21 @@
+/* Product card image wrapper */
+.product-card-image {
+  width: 100%;
+  aspect-ratio: 1 / 1;      /* consistent square */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f6f7f8;      /* neutral */
+  border-radius: 10px;
+  overflow: hidden;
+  padding: 10px;
+}
+
+/* The <img> itself */
+.product-card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;      /* key: no cropping */
+  object-position: center;
+  display: block;
+}
