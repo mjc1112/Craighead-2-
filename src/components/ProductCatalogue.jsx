@@ -1,394 +1,644 @@
-// src/components/ProductCatalogue.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "../lib/supabaseClient.js";
-
-// IMPORTANT: ensure this file exists in repo: /public/images/product-placeholder-dark.jpg
-const FALLBACK_IMG = "/images/product-placeholder-dark.jpg";
-const PAGE_SIZE = 24;
-
-// IMPORTANT: you created this file in GitHub: /src/styles/Product-card.css
-// It must be imported so the class names apply.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "../styles/Product-card.css";
 
-function normaliseKey(v) {
-  return String(v || "").trim().toLowerCase();
-}
+// Adjust this import path to your project.
+// Common patterns: "../lib/supabaseClient" or "../supabaseClient"
+import { supabase } from "../lib/supabaseClient";
 
-function resolveCategoryId(categories, preset) {
-  const key = normaliseKey(preset);
-  if (!key) return null;
+const PLACEHOLDER_SRC = "/images/product-placeholder-dark.jpg";
 
-  // Stage 5.1: preset is a SLUG end-to-end, so slug match is primary
-  const bySlug = categories.find((c) => normaliseKey(c.slug) === key);
-  if (bySlug) return bySlug.id;
+// Defensive helpers
+const safeTrim = (v) => (typeof v === "string" ? v.trim() : "");
+const isNonEmptyUrl = (v) => safeTrim(v).length > 0;
+const clampInt = (n, min, max) => Math.max(min, Math.min(max, n));
 
-  // Fallback: allow name match for backwards compatibility
-  const byName = categories.find((c) => normaliseKey(c.name) === key);
-  if (byName) return byName.id;
+// Optional: if you want to “phone home” telemetry to your own endpoint later.
+// Leave disabled by default to avoid noise.
+const ENABLE_TELEMETRY_POST = false;
+const TELEMETRY_ENDPOINT = "/api/image-telemetry";
 
-  return null;
-}
+/**
+ * ProductCatalogue
+ *
+ * Props:
+ * - initialCategory (string)
+ * - initialBrand (string)
+ * - pageSize (number) default 24
+ * - isAdmin (boolean) if true, shows Image Health panel button
+ */
+export default function ProductCatalogue({
+  initialCategory = "",
+  initialBrand = "",
+  pageSize = 24,
+  isAdmin = false,
+}) {
+  // Filters
+  const [category, setCategory] = useState(initialCategory);
+  const [brand, setBrand] = useState(initialBrand);
+  const [search, setSearch] = useState("");
 
-// Strict image resolution: always returns a safe string URL.
-// Prevents empty strings, null, undefined, whitespace, etc.
-function getImageUrl(imageUrlValue) {
-  const val = String(imageUrlValue || "").trim();
-  return val.length > 0 ? val : FALLBACK_IMG;
-}
-
-export default function ProductCatalogue({ presetCategoryName, onPresetConsumed }) {
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-
+  // Data lists (you may already have these elsewhere; keeping self-contained)
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
 
-  const [selectedCategoryId, setSelectedCategoryId] = useState(null);
-  const [selectedBrandId, setSelectedBrandId] = useState("all");
-  const [query, setQuery] = useState("");
-
+  // Products
   const [products, setProducts] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
+
+  // Paging
   const [page, setPage] = useState(1);
+  const perPage = clampInt(pageSize, 8, 60);
 
-  // Consume preset exactly once per mount (prevents all buttons collapsing into one selection)
-  const presetConsumedRef = useRef(false);
+  // Loading states
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
-  // Load lookup tables (categories + brands) once
+  // Image telemetry (per render session)
+  const [imgLoaded, setImgLoaded] = useState(0);
+  const [imgErrored, setImgErrored] = useState(0);
+  const [imgPending, setImgPending] = useState(0);
+
+  // Keeps detailed error list for admin review
+  const [imgErrorList, setImgErrorList] = useState([]); // { sku, name, image_url, reason }
+  const imgErrorSetRef = useRef(new Set()); // de-dupe by sku
+
+  // Admin health check modal/panel
+  const [showHealth, setShowHealth] = useState(false);
+  const [healthRunning, setHealthRunning] = useState(false);
+  const [healthResults, setHealthResults] = useState([]); // { sku, name, image_url, ok, reason }
+
+  // Reset paging when filters change
   useEffect(() => {
-    let isMounted = true;
+    setPage(1);
+  }, [category, brand, search]);
 
-    async function boot() {
-      setLoading(true);
-      setLoadError("");
+  // Load dropdown lists (categories/brands)
+  useEffect(() => {
+    let cancelled = false;
 
+    async function loadLists() {
       try {
-        const [{ data: catData, error: catErr }, { data: brandData, error: brandErr }] =
-          await Promise.all([
-            supabase
-              .from("categories")
-              .select("id, slug, name, parent_id")
-              .order("id", { ascending: true }),
-            supabase
-              .from("brands")
-              .select("id, name")
-              .order("name", { ascending: true }),
-          ]);
+        // Categories
+        const { data: catData, error: catErr } = await supabase
+          .from("categories")
+          .select("id,name,slug,parent_id")
+          .order("name", { ascending: true });
 
         if (catErr) throw catErr;
+
+        // Brands
+        const { data: brandData, error: brandErr } = await supabase
+          .from("brands")
+          .select("id,name")
+          .order("name", { ascending: true });
+
         if (brandErr) throw brandErr;
 
-        if (!isMounted) return;
-
-        setCategories(catData || []);
-        setBrands(brandData || []);
+        if (!cancelled) {
+          setCategories(catData || []);
+          setBrands(brandData || []);
+        }
       } catch (e) {
-        if (!isMounted) return;
-        setLoadError(e?.message || "Failed to load catalogue tables.");
-      } finally {
-        if (!isMounted) return;
-        setLoading(false);
+        // Non-blocking; catalogue can still render if lists fail
+        console.warn("Catalogue: failed to load lists", e);
       }
     }
 
-    boot();
+    loadLists();
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
   }, []);
 
-  // Decide initial category (preset slug > localStorage > first category)
-  useEffect(() => {
-    if (!categories.length) return;
-    if (presetConsumedRef.current) return;
-
-    const fromStorage = (() => {
-      try {
-        return localStorage.getItem("cb_category_name") || "";
-      } catch {
-        return "";
-      }
-    })();
-
-    const preset = presetCategoryName || fromStorage;
-
-    const resolvedId = resolveCategoryId(categories, preset);
-    const fallbackId = categories[0]?.id ?? null;
-
-    setSelectedCategoryId(resolvedId || fallbackId);
-
-    // Clear sticky preset so other buttons do not keep loading the same category
-    presetConsumedRef.current = true;
-    try {
-      if (fromStorage) localStorage.removeItem("cb_category_name");
-    } catch {
-      // ignore
-    }
-
-    if (typeof onPresetConsumed === "function") onPresetConsumed();
-  }, [categories, presetCategoryName, onPresetConsumed]);
-
-  // Load products whenever selectedCategoryId changes
-  useEffect(() => {
-    if (!selectedCategoryId) return;
-
-    let isMounted = true;
-
-    async function loadProducts() {
-      setLoading(true);
-      setLoadError("");
-      setPage(1);
-
-      try {
-        const { data, error } = await supabase
-          .from("products")
-          .select(
-            "id, category_id, brand_id, name, sku, description, image_url, is_active"
-          )
-          .eq("category_id", selectedCategoryId)
-          .eq("is_active", true)
-          .order("name", { ascending: true })
-          .limit(5000);
-
-        if (error) throw error;
-        if (!isMounted) return;
-
-        setProducts(data || []);
-      } catch (e) {
-        if (!isMounted) return;
-        setLoadError(e?.message || "Failed to load products for this category.");
-        setProducts([]);
-      } finally {
-        if (!isMounted) return;
-        setLoading(false);
-      }
-    }
-
-    loadProducts();
-    return () => {
-      isMounted = false;
+  // Build query constraints
+  const queryConstraints = useMemo(() => {
+    return {
+      category,
+      brand,
+      search: safeTrim(search),
+      page,
+      perPage,
     };
-  }, [selectedCategoryId]);
+  }, [category, brand, search, page, perPage]);
 
-  const selectedCategory = useMemo(() => {
-    return categories.find((c) => String(c.id) === String(selectedCategoryId)) || null;
-  }, [categories, selectedCategoryId]);
+  // Fetch products
+  const fetchProducts = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
 
-  // Filter products client-side (safe + fast for <=5000 rows)
-  const filteredProducts = useMemo(() => {
-    const q = normaliseKey(query);
+    // Reset image telemetry per fetch
+    setImgLoaded(0);
+    setImgErrored(0);
+    setImgPending(0);
+    setImgErrorList([]);
+    imgErrorSetRef.current = new Set();
 
-    return products.filter((p) => {
-      if (selectedBrandId !== "all" && String(p.brand_id) !== String(selectedBrandId)) {
-        return false;
+    try {
+      const from = (queryConstraints.page - 1) * queryConstraints.perPage;
+      const to = from + queryConstraints.perPage - 1;
+
+      // Note: adapt field names if yours differ
+      // Expected columns: id, sku, name, image_url, brand_id, category_id, price, description, etc.
+      let q = supabase
+        .from("products")
+        .select(
+          "id,sku,name,image_url,price,short_description,description,brand_id,category_id,is_active",
+          { count: "exact" }
+        )
+        .eq("is_active", true);
+
+      // If your UI uses names rather than IDs, you likely already map them.
+      // Here we assume you store selected filters as *names* (like “Makita”, “Power Tools”).
+      // If you store IDs in state instead, change these filters accordingly.
+
+      if (isNonEmptyUrl(queryConstraints.brand)) {
+        // brand stored as name -> lookup brand id locally
+        const match = brands.find(
+          (b) => b.name.toLowerCase() === queryConstraints.brand.toLowerCase()
+        );
+        if (match?.id) q = q.eq("brand_id", match.id);
       }
 
-      if (!q) return true;
+      if (isNonEmptyUrl(queryConstraints.category)) {
+        // category stored as name -> lookup category id locally
+        const match = categories.find(
+          (c) => c.name.toLowerCase() === queryConstraints.category.toLowerCase()
+        );
+        if (match?.id) q = q.eq("category_id", match.id);
+      }
 
-      const hay = normaliseKey(`${p.name || ""} ${p.sku || ""} ${p.description || ""}`);
-      return hay.includes(q);
-    });
-  }, [products, query, selectedBrandId]);
+      if (queryConstraints.search) {
+        // Lightweight search. Adjust to your DB/search strategy.
+        // Common: ilike on sku/name/description.
+        q = q.or(
+          [
+            `sku.ilike.%${queryConstraints.search}%`,
+            `name.ilike.%${queryConstraints.search}%`,
+            `description.ilike.%${queryConstraints.search}%`,
+          ].join(",")
+        );
+      }
 
-  const totalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
-  }, [filteredProducts.length]);
+      q = q.order("name", { ascending: true }).range(from, to);
+
+      const { data, error, count } = await q;
+      if (error) throw error;
+
+      setProducts(data || []);
+      setTotalCount(count || 0);
+
+      // Set pending images count based on products that have an image_url (attempt load) or will show placeholder (still loads placeholder image).
+      // We treat every card image as pending until it fires onLoad/onError.
+      setImgPending((data || []).length);
+    } catch (e) {
+      console.error("Catalogue: fetchProducts failed", e);
+      setLoadError(
+        e?.message ||
+          "Unable to load products at this time. Please try again shortly."
+      );
+      setProducts([]);
+      setTotalCount(0);
+      setImgPending(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [queryConstraints, brands, categories]);
 
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    fetchProducts();
+  }, [fetchProducts]);
 
-  const pagedProducts = useMemo(() => {
-    const safePage = Math.min(Math.max(page, 1), totalPages);
-    const start = (safePage - 1) * PAGE_SIZE;
-    return filteredProducts.slice(start, start + PAGE_SIZE);
-  }, [filteredProducts, page, totalPages]);
+  // Pagination helpers
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil((totalCount || 0) / perPage));
+  }, [totalCount, perPage]);
+
+  const canPrev = page > 1;
+  const canNext = page < totalPages;
+
+  const handlePrev = () => setPage((p) => Math.max(1, p - 1));
+  const handleNext = () => setPage((p) => Math.min(totalPages, p + 1));
+
+  // Image telemetry handlers
+  const onImgLoad = useCallback(() => {
+    setImgLoaded((n) => n + 1);
+    setImgPending((n) => Math.max(0, n - 1));
+  }, []);
+
+  const onImgError = useCallback((product, e) => {
+    setImgErrored((n) => n + 1);
+    setImgPending((n) => Math.max(0, n - 1));
+
+    // Apply fallback only once
+    const img = e?.currentTarget;
+    if (img && !img.dataset.fallbackApplied) {
+      img.dataset.fallbackApplied = "1";
+      img.src = PLACEHOLDER_SRC;
+    }
+
+    // Record error (de-dupe by SKU)
+    const sku = product?.sku || "";
+    if (sku && !imgErrorSetRef.current.has(sku)) {
+      imgErrorSetRef.current.add(sku);
+
+      setImgErrorList((list) => [
+        ...list,
+        {
+          sku,
+          name: product?.name || "",
+          image_url: product?.image_url || "",
+          reason: "Image failed to load (onError fired)",
+        },
+      ]);
+    }
+  }, []);
+
+  // Optional telemetry post (kept OFF by default)
+  useEffect(() => {
+    if (!ENABLE_TELEMETRY_POST) return;
+    if (!products.length) return;
+
+    // Post only when all images are done (pending is 0)
+    if (imgPending !== 0) return;
+
+    const payload = {
+      ts: new Date().toISOString(),
+      filters: { category, brand, search, page, perPage },
+      totals: {
+        products: products.length,
+        loaded: imgLoaded,
+        errored: imgErrored,
+      },
+      errors: imgErrorList,
+    };
+
+    fetch(TELEMETRY_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  }, [
+    imgPending,
+    products.length,
+    imgLoaded,
+    imgErrored,
+    imgErrorList,
+    category,
+    brand,
+    search,
+    page,
+    perPage,
+  ]);
+
+  // Admin image health check:
+  // This actively attempts to load each image URL (without touching DOM cards),
+  // reports ok/fail. Uses Image() which respects CORS in practice for load events.
+  const runImageHealthCheck = useCallback(async () => {
+    setHealthRunning(true);
+    setHealthResults([]);
+
+    const list = products.map((p) => ({
+      sku: p.sku,
+      name: p.name,
+      image_url: p.image_url,
+    }));
+
+    const checkOne = (item) =>
+      new Promise((resolve) => {
+        // If no URL stored, treat as fail
+        if (!isNonEmptyUrl(item.image_url)) {
+          resolve({ ...item, ok: false, reason: "Missing image_url in DB" });
+          return;
+        }
+
+        const img = new Image();
+        const timeoutMs = 8000;
+
+        const t = setTimeout(() => {
+          cleanup();
+          resolve({ ...item, ok: false, reason: "Timeout loading image" });
+        }, timeoutMs);
+
+        const cleanup = () => {
+          clearTimeout(t);
+          img.onload = null;
+          img.onerror = null;
+        };
+
+        img.onload = () => {
+          cleanup();
+          resolve({ ...item, ok: true, reason: "" });
+        };
+
+        img.onerror = () => {
+          cleanup();
+          resolve({ ...item, ok: false, reason: "Failed to load image URL" });
+        };
+
+        // Cache-bust to avoid stale / broken cached response during testing
+        const u = new URL(item.image_url, window.location.origin);
+        u.searchParams.set("_cb", String(Date.now()));
+        img.src = u.toString();
+      });
+
+    // Run with limited concurrency (avoid flooding)
+    const concurrency = 6;
+    const results = [];
+    let idx = 0;
+
+    async function worker() {
+      while (idx < list.length) {
+        const i = idx++;
+        const r = await checkOne(list[i]);
+        results[i] = r;
+        // stream partial results to UI
+        setHealthResults((prev) => {
+          const next = prev.slice();
+          next[i] = r;
+          return next;
+        });
+      }
+    }
+
+    await Promise.all(Array.from({ length: concurrency }, worker));
+
+    setHealthRunning(false);
+  }, [products]);
 
   return (
-    <section className="cb-section">
-      <div className="cb-section__inner">
-        <h2 className="cb-mission__title">Product Catalogue</h2>
-
-        {selectedCategory ? (
-          <p className="cb-mission__text" style={{ marginTop: 6 }}>
-            Browsing: <strong>{selectedCategory.name}</strong>{" "}
-            <span style={{ opacity: 0.7 }}>
-              ({filteredProducts.length} products found)
-            </span>
-          </p>
-        ) : null}
-
-        {/* Filters */}
-        <div
-          className="cb-catalogue__filters"
-          style={{
-            display: "grid",
-            gap: 12,
-            gridTemplateColumns: "1fr 1fr 2fr",
-            marginTop: 16,
-          }}
-        >
-          <div>
-            <label style={{ display: "block", marginBottom: 6 }}>Category</label>
-            <select
-              style={{ width: "100%", padding: 10, borderRadius: 10 }}
-              value={selectedCategoryId ?? ""}
-              onChange={(e) => setSelectedCategoryId(Number(e.target.value))}
-            >
+    <section className="product-catalogue">
+      <div className="product-catalogue-header">
+        <div className="product-catalogue-controls">
+          <div className="control">
+            <label>Category</label>
+            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="">All</option>
               {categories.map((c) => (
-                <option key={c.id} value={c.id}>
+                <option key={c.id} value={c.name}>
                   {c.name}
                 </option>
               ))}
             </select>
           </div>
 
-          <div>
-            <label style={{ display: "block", marginBottom: 6 }}>Brand</label>
-            <select
-              style={{ width: "100%", padding: 10, borderRadius: 10 }}
-              value={selectedBrandId}
-              onChange={(e) => setSelectedBrandId(e.target.value)}
-            >
-              <option value="all">All brands</option>
+          <div className="control">
+            <label>Brand</label>
+            <select value={brand} onChange={(e) => setBrand(e.target.value)}>
+              <option value="">All</option>
               {brands.map((b) => (
-                <option key={b.id} value={String(b.id)}>
+                <option key={b.id} value={b.name}>
                   {b.name}
                 </option>
               ))}
             </select>
           </div>
 
-          <div>
-            <label style={{ display: "block", marginBottom: 6 }}>Search</label>
+          <div className="control control-search">
+            <label>Search</label>
             <input
-              style={{ width: "100%", padding: 10, borderRadius: 10 }}
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by name, SKU, description..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, SKU, description…"
+              inputMode="search"
+              autoComplete="off"
+              spellCheck={false}
             />
           </div>
         </div>
 
-        {/* Errors / Status */}
-        {loadError ? (
-          <div
-            style={{
-              marginTop: 16,
-              padding: 12,
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.12)",
-            }}
-          >
-            <strong>Catalogue error:</strong> {loadError}
+        <div className="product-catalogue-meta">
+          <div className="meta-row">
+            <span>
+              Browsing{" "}
+              <strong>
+                {category || "All"} / {brand || "All"}
+              </strong>{" "}
+              ({totalCount} products found)
+            </span>
+
+            {isAdmin && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={() => setShowHealth(true)}
+              >
+                Image Health
+              </button>
+            )}
           </div>
-        ) : null}
 
-        {loading ? <p style={{ marginTop: 16 }}>Loading…</p> : null}
+          {/* Telemetry readout (helpful while you validate) */}
+          <div className="meta-row telemetry">
+            <span>Images: </span>
+            <span className="telemetry-pill">Loaded {imgLoaded}</span>
+            <span className="telemetry-pill">Errored {imgErrored}</span>
+            <span className="telemetry-pill">Pending {imgPending}</span>
+          </div>
 
-        {/* Grid */}
-        {!loading && !loadError ? (
-          <>
-            <div
-              className="cb-grid"
-              style={{
-                marginTop: 18,
-                display: "grid",
-                gap: 16,
-                gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-              }}
-            >
-              {pagedProducts.map((p) => {
-                const img = getImageUrl(p.image_url);
-
-                return (
-                  <article
-                    key={p.id}
-                    className="cb-card"
-                    style={{
-                      borderRadius: 16,
-                      overflow: "hidden",
-                      border: "1px solid rgba(255,255,255,0.10)",
-                      background: "rgba(255,255,255,0.03)",
-                    }}
-                  >
-                    {/* IMPORTANT: wrapper class ties to Product-card.css */}
-                    <div className="product-card-image">
-                      <img
-                        src={img}
-                        alt={p.name || "Product"}
-                        loading="lazy"
-                        onError={(e) => {
-                          // Prevent infinite loop by only swapping once
-                          if (e.currentTarget.dataset.fallbackApplied) return;
-                          e.currentTarget.dataset.fallbackApplied = "1";
-                          e.currentTarget.src = FALLBACK_IMG;
-                        }}
-                      />
-                    </div>
-
-                    <div style={{ padding: 12 }}>
-                      <div style={{ fontWeight: 700, lineHeight: 1.2 }}>
-                        {p.name}
-                      </div>
-                      {p.sku ? (
-                        <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>
-                          {p.sku}
-                        </div>
-                      ) : null}
-                      {p.description ? (
-                        <div
-                          style={{
-                            opacity: 0.85,
-                            marginTop: 10,
-                            fontSize: 13,
-                            lineHeight: 1.35,
-                          }}
-                        >
-                          {p.description}
-                        </div>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-
-            {/* Pagination */}
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                justifyContent: "center",
-                marginTop: 18,
-              }}
-            >
-              <button
-                className="cb-btn cb-btn--secondary"
-                type="button"
-                onClick={() => setPage((v) => Math.max(1, v - 1))}
-                disabled={page <= 1}
-              >
-                Prev
-              </button>
-
-              <span style={{ opacity: 0.85 }}>
-                Page {page} of {totalPages}
-              </span>
-
-              <button
-                className="cb-btn cb-btn--secondary"
-                type="button"
-                onClick={() => setPage((v) => Math.min(totalPages, v + 1))}
-                disabled={page >= totalPages}
-              >
-                Next
-              </button>
-            </div>
-          </>
-        ) : null}
+          {loadError && <div className="error-banner">{loadError}</div>}
+        </div>
       </div>
+
+      {/* Grid */}
+      <div className="product-grid">
+        {loading
+          ? Array.from({ length: perPage }).map((_, i) => (
+              <SkeletonCard key={`sk-${i}`} />
+            ))
+          : products.map((p) => (
+              <ProductCard
+                key={p.id}
+                product={p}
+                onImgLoad={onImgLoad}
+                onImgError={onImgError}
+              />
+            ))}
+      </div>
+
+      {/* Pagination */}
+      <div className="product-pagination">
+        <button className="btn" disabled={!canPrev || loading} onClick={handlePrev}>
+          PREV
+        </button>
+        <span>
+          Page {page} of {totalPages}
+        </span>
+        <button className="btn" disabled={!canNext || loading} onClick={handleNext}>
+          NEXT
+        </button>
+      </div>
+
+      {/* Admin: Image Health panel */}
+      {showHealth && (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Image Health Check (current page)</h3>
+              <button className="btn btn-ghost" onClick={() => setShowHealth(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="health-actions">
+                <button
+                  className="btn btn-secondary"
+                  disabled={healthRunning || !products.length}
+                  onClick={runImageHealthCheck}
+                >
+                  {healthRunning ? "Running…" : "Run health check"}
+                </button>
+
+                <button
+                  className="btn"
+                  disabled={!healthResults.length}
+                  onClick={() => downloadJson(healthResults, "image-health.json")}
+                >
+                  Export JSON
+                </button>
+
+                <button
+                  className="btn"
+                  disabled={!imgErrorList.length}
+                  onClick={() => downloadJson(imgErrorList, "image-onerror-list.json")}
+                >
+                  Export onError list
+                </button>
+              </div>
+
+              <div className="health-summary">
+                <strong>Summary:</strong>{" "}
+                {healthResults.length
+                  ? `${healthResults.filter((r) => r?.ok).length} OK, ${
+                      healthResults.filter((r) => r && !r.ok).length
+                    } FAIL`
+                  : "No results yet."}
+              </div>
+
+              <div className="health-table">
+                <div className="health-row health-head">
+                  <div>SKU</div>
+                  <div>Status</div>
+                  <div>Reason</div>
+                </div>
+
+                {(healthResults.length ? healthResults : products).map((r, idx) => {
+                  const item = healthResults[idx] || null;
+                  const sku = item?.sku || r?.sku || "";
+                  const ok = item?.ok;
+                  const reason = item?.reason || "";
+
+                  return (
+                    <div key={sku || idx} className="health-row">
+                      <div className="mono">{sku}</div>
+                      <div>
+                        {ok === undefined ? (
+                          <span className="pill pill-muted">Not checked</span>
+                        ) : ok ? (
+                          <span className="pill pill-ok">OK</span>
+                        ) : (
+                          <span className="pill pill-bad">FAIL</span>
+                        )}
+                      </div>
+                      <div className="muted">{reason}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {!!imgErrorList.length && (
+                <div className="health-errors">
+                  <h4>Runtime onError events (from cards)</h4>
+                  <ul>
+                    {imgErrorList.map((e) => (
+                      <li key={e.sku}>
+                        <span className="mono">{e.sku}</span> — {e.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
+}
+
+function ProductCard({ product, onImgLoad, onImgError }) {
+  const [imgLoading, setImgLoading] = useState(true);
+
+  // IMPORTANT:
+  // We do NOT default to placeholder. We always try DB value first.
+  // Placeholder is applied only if image truly fails to load (onError).
+  const src = isNonEmptyUrl(product?.image_url) ? product.image_url : PLACEHOLDER_SRC;
+
+  return (
+    <div className="product-card">
+      <div className="product-card-image">
+        {/* skeleton overlay */}
+        {imgLoading && <div className="image-skeleton" aria-hidden="true" />}
+
+        <img
+          src={src}
+          alt={product?.name || "Product image"}
+          loading="lazy"
+          onLoad={() => {
+            setImgLoading(false);
+            onImgLoad();
+          }}
+          onError={(e) => {
+            setImgLoading(false);
+            onImgError(product, e);
+          }}
+        />
+      </div>
+
+      <div className="product-card-body">
+        <h4 className="product-title">{product?.name}</h4>
+        <div className="product-meta">
+          <span className="mono">{product?.sku}</span>
+          {typeof product?.price === "number" && (
+            <span className="price">£{product.price.toFixed(2)}</span>
+          )}
+        </div>
+
+        {product?.short_description ? (
+          <p className="product-desc">{product.short_description}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="product-card">
+      <div className="product-card-image">
+        <div className="image-skeleton" />
+      </div>
+      <div className="product-card-body">
+        <div className="skeleton-line w80" />
+        <div className="skeleton-line w50" />
+        <div className="skeleton-line w90" />
+      </div>
+    </div>
+  );
+}
+
+function downloadJson(obj, filename) {
+  try {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch {
+    // ignore
+  }
 }
