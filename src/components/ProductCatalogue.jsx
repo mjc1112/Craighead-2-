@@ -1,379 +1,401 @@
-// src/components/ProductCatalogue.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "../lib/supabaseClient"; // adjust if your path differs
-import "../styles/Product-card.css"; // your existing product-card image CSS (safe to keep)
+import { supabase } from "../lib/supabaseClient";
+import "../styles/Product-card.css";
 
 /**
- * ProductCatalogue (NO PRICING)
- * - Queries: public.products (id, sku, name, description, image_url, brand_id, category_id, is_active)
- * - Filters: Category, Brand, Search
- * - Pagination: safe range() usage + exact count
- * - Robust: handles schema mismatches, empty results, network failures, stale requests
+ * ProductCatalogue.jsx (clean, defensive, no price fields)
+ * - Robust Supabase fetch (no missing columns)
+ * - Skeleton loaders
+ * - Image telemetry + admin-side health diagnostics
  */
 
-const PAGE_SIZE = 24;
-const PLACEHOLDER_IMG = "/images/product-placeholder-dark.jpg";
+const PAGE_SIZE = 20;
+
+const PLACEHOLDER_SRC = "/images/product-placeholder-dark.jpg";
 
 function safeTrim(v) {
-  return (v ?? "").toString().trim();
+  return typeof v === "string" ? v.trim() : "";
 }
 
-function buildOrFilter(search) {
-  const q = safeTrim(search);
-  if (!q) return null;
-
-  // Escape commas for Supabase "or" filter (defensive)
-  const esc = q.replaceAll(",", "\\,");
-  const like = `%${esc}%`;
-
-  // Search name / sku / description
-  return `name.ilike.${like},sku.ilike.${like},description.ilike.${like}`;
+function hasRealImage(url) {
+  const u = safeTrim(url);
+  return u.length > 0 && u !== PLACEHOLDER_SRC;
 }
 
 export default function ProductCatalogue() {
-  // Filters
-  const [categoryId, setCategoryId] = useState("all");
-  const [brandId, setBrandId] = useState("all");
-  const [search, setSearch] = useState("");
-
-  // Data lists
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
 
-  // Products
+  const [selectedCategoryId, setSelectedCategoryId] = useState("all");
+  const [selectedBrandId, setSelectedBrandId] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const [page, setPage] = useState(1);
+
   const [products, setProducts] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
 
-  // UI state
-  const [page, setPage] = useState(1);
-  const [loadingLists, setLoadingLists] = useState(true);
-  const [loadingProducts, setLoadingProducts] = useState(true);
-  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
-  // Telemetry (optional, but harmless)
-  const [imageTelemetry, setImageTelemetry] = useState({
-    attempted: 0,
-    loaded: 0,
-    errored: 0,
-    fallbackApplied: 0,
-  });
+  // Telemetry
+  const [imgLoaded, setImgLoaded] = useState(0);
+  const [imgErrored, setImgErrored] = useState(0);
+  const [imgPlaceholder, setImgPlaceholder] = useState(0);
 
-  // Prevent stale responses overwriting state
-  const requestSeq = useRef(0);
+  // Admin diagnostics
+  const [showHealth, setShowHealth] = useState(false);
+  const [brokenImages, setBrokenImages] = useState([]); // { id, sku, name, image_url, reason }
+
+  const lastFetchKeyRef = useRef("");
 
   const totalPages = useMemo(() => {
-    const pages = Math.ceil((totalCount || 0) / PAGE_SIZE);
-    return pages > 0 ? pages : 1;
+    return Math.max(1, Math.ceil((totalCount || 0) / PAGE_SIZE));
   }, [totalCount]);
 
-  // If filters/search change, reset page to 1
+  // Reset paging when filters change
   useEffect(() => {
     setPage(1);
-  }, [categoryId, brandId, search]);
+  }, [selectedCategoryId, selectedBrandId, search]);
 
-  // Load Categories + Brands
+  // Load filter lists
   useEffect(() => {
-    let alive = true;
+    let mounted = true;
 
-    async function loadLists() {
-      setLoadingLists(true);
-      setError(null);
-
+    async function loadFilters() {
+      setLoadError("");
       try {
-        const [catRes, brandRes] = await Promise.all([
-          supabase
-            .from("categories")
-            .select("id, name")
-            .order("name", { ascending: true }),
-          supabase
-            .from("brands")
-            .select("id, name")
-            .order("name", { ascending: true }),
-        ]);
+        // categories
+        const { data: catData, error: catErr } = await supabase
+          .from("categories")
+          .select("id, name")
+          .order("name", { ascending: true });
 
-        if (!alive) return;
+        if (catErr) throw catErr;
 
-        if (catRes.error) throw catRes.error;
-        if (brandRes.error) throw brandRes.error;
+        // brands
+        const { data: brandData, error: brandErr } = await supabase
+          .from("brands")
+          .select("id, name")
+          .order("name", { ascending: true });
 
-        setCategories(Array.isArray(catRes.data) ? catRes.data : []);
-        setBrands(Array.isArray(brandRes.data) ? brandRes.data : []);
+        if (brandErr) throw brandErr;
+
+        if (!mounted) return;
+        setCategories(Array.isArray(catData) ? catData : []);
+        setBrands(Array.isArray(brandData) ? brandData : []);
       } catch (e) {
-        if (!alive) return;
-        setError({
-          title: "Failed to load catalogue lists",
-          detail: e?.message || String(e),
-        });
-      } finally {
-        if (alive) setLoadingLists(false);
+        console.error("Failed loading filters:", e);
+        if (!mounted) return;
+        setLoadError(e?.message || "Failed to load filters.");
       }
     }
 
-    loadLists();
+    loadFilters();
     return () => {
-      alive = false;
+      mounted = false;
     };
   }, []);
 
-  // Load Products (NO PRICE FIELDS)
+  // Load products
   useEffect(() => {
-    let alive = true;
-    const seq = ++requestSeq.current;
+    let mounted = true;
 
     async function loadProducts() {
-      setLoadingProducts(true);
-      setError(null);
+      setLoading(true);
+      setLoadError("");
+
+      // reset telemetry per fetch
+      setImgLoaded(0);
+      setImgErrored(0);
+      setImgPlaceholder(0);
+      setBrokenImages([]);
+
+      const from = (page - 1) * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      // Create a fetch key so we don’t apply stale results
+      const fetchKey = JSON.stringify({
+        selectedCategoryId,
+        selectedBrandId,
+        search,
+        page,
+      });
+      lastFetchKeyRef.current = fetchKey;
 
       try {
-        const from = (page - 1) * PAGE_SIZE;
-        const to = from + PAGE_SIZE - 1;
-
-        // Base select: ONLY columns that exist per your confirmed schema
-        let q = supabase
+        let query = supabase
           .from("products")
           .select(
-            "id, sku, name, description, image_url, brand_id, category_id, is_active",
+            "id, category_id, brand_id, name, sku, description, image_url",
             { count: "exact" }
           )
-          .eq("is_active", true)
-          .order("name", { ascending: true })
-          .range(from, to);
+          .eq("is_active", true);
 
-        if (categoryId !== "all") q = q.eq("category_id", Number(categoryId));
-        if (brandId !== "all") q = q.eq("brand_id", Number(brandId));
+        // Filters
+        if (selectedCategoryId !== "all") {
+          query = query.eq("category_id", Number(selectedCategoryId));
+        }
+        if (selectedBrandId !== "all") {
+          query = query.eq("brand_id", Number(selectedBrandId));
+        }
 
-        const orFilter = buildOrFilter(search);
-        if (orFilter) q = q.or(orFilter);
+        const s = safeTrim(search);
+        if (s.length > 0) {
+          // Search across sku + name + description
+          // Note: ilike with OR syntax
+          const escaped = s.replace(/%/g, "\\%").replace(/_/g, "\\_");
+          query = query.or(
+            `sku.ilike.%${escaped}%,name.ilike.%${escaped}%,description.ilike.%${escaped}%`
+          );
+        }
 
-        const res = await q;
+        query = query.order("name", { ascending: true }).range(from, to);
 
-        // Ignore stale responses
-        if (!alive || seq !== requestSeq.current) return;
+        const { data, error, count } = await query;
 
-        if (res.error) throw res.error;
+        // If another fetch started after this one, ignore this result
+        if (lastFetchKeyRef.current !== fetchKey) return;
 
-        const rows = Array.isArray(res.data) ? res.data : [];
+        if (error) throw error;
+
+        if (!mounted) return;
+
+        const rows = Array.isArray(data) ? data : [];
         setProducts(rows);
-        setTotalCount(typeof res.count === "number" ? res.count : rows.length);
-      } catch (e) {
-        if (!alive || seq !== requestSeq.current) return;
+        setTotalCount(typeof count === "number" ? count : 0);
 
+        // Debug (remove later if you want)
+        const withImage = rows.filter((p) => hasRealImage(p.image_url)).length;
+        const sample = rows.find((p) => hasRealImage(p.image_url))?.image_url || null;
+        console.log(
+          `[ProductCatalogue] fetched=${rows.length}, image_url present=${withImage}, sample=${sample}`
+        );
+      } catch (e) {
+        console.error("Failed loading products:", e);
+        if (!mounted) return;
         setProducts([]);
         setTotalCount(0);
-
-        setError({
-          title: "Failed to load products",
-          detail: e?.message || String(e),
-        });
+        setLoadError(e?.message || "Failed to load products.");
       } finally {
-        if (alive && seq === requestSeq.current) setLoadingProducts(false);
+        if (mounted) setLoading(false);
       }
     }
 
     loadProducts();
     return () => {
-      alive = false;
+      mounted = false;
     };
-  }, [page, categoryId, brandId, search]);
+  }, [selectedCategoryId, selectedBrandId, search, page]);
 
-  function goPrev() {
-    setPage((p) => Math.max(1, p - 1));
+  function onImgLoad(e) {
+    setImgLoaded((v) => v + 1);
   }
 
-  function goNext() {
-    setPage((p) => Math.min(totalPages, p + 1));
-  }
+  function onImgError(product, e) {
+    setImgErrored((v) => v + 1);
 
-  function resolveImageUrl(product) {
-    const url = safeTrim(product?.image_url);
-    return url || PLACEHOLDER_IMG;
-  }
-
-  function handleImgLoad() {
-    setImageTelemetry((t) => ({
-      ...t,
-      loaded: t.loaded + 1,
-    }));
-  }
-
-  function handleImgError(e) {
-    const img = e?.currentTarget;
-    if (!img) return;
-
-    // Apply fallback once only
-    const already = img.dataset.fallbackApplied === "1";
-    setImageTelemetry((t) => ({
-      ...t,
-      errored: t.errored + 1,
-      fallbackApplied: t.fallbackApplied + (already ? 0 : 1),
-    }));
-
-    if (!already) {
-      img.dataset.fallbackApplied = "1";
-      img.src = PLACEHOLDER_IMG;
+    // If the image fails, switch to placeholder
+    if (e?.currentTarget && e.currentTarget.src !== window.location.origin + PLACEHOLDER_SRC) {
+      e.currentTarget.src = PLACEHOLDER_SRC;
+      e.currentTarget.setAttribute("data-fallback-applied", "1");
     }
+
+    // Record as broken for admin health view
+    setBrokenImages((prev) => {
+      // Avoid duplicates
+      if (prev.some((x) => x.id === product.id)) return prev;
+      return [
+        ...prev,
+        {
+          id: product.id,
+          sku: product.sku,
+          name: product.name,
+          image_url: product.image_url,
+          reason: "Image request failed (check 403/404 in Network tab).",
+        },
+      ];
+    });
   }
 
-  // Track "attempted" image loads per render (best-effort)
+  // After products render, count placeholders (rough)
   useEffect(() => {
-    if (!loadingProducts) {
-      setImageTelemetry((t) => ({
-        ...t,
-        attempted: products.length,
-      }));
-    }
-  }, [loadingProducts, products.length]);
+    const placeholders = products.filter((p) => !hasRealImage(p.image_url)).length;
+    setImgPlaceholder(placeholders);
+  }, [products]);
+
+  const browsingLabel = useMemo(() => {
+    const catName =
+      selectedCategoryId === "all"
+        ? "All"
+        : categories.find((c) => String(c.id) === String(selectedCategoryId))?.name || "Category";
+    const brandName =
+      selectedBrandId === "all"
+        ? "All"
+        : brands.find((b) => String(b.id) === String(selectedBrandId))?.name || "Brand";
+    return `${catName} / ${brandName}`;
+  }, [selectedCategoryId, selectedBrandId, categories, brands]);
 
   return (
-    <section className="cb-section">
-      <div className="cb-catalogue-header">
-        <h2 className="cb-title">Product Catalogue</h2>
+    <section className="product-catalogue">
+      <div className="product-catalogue-header">
+        <h2>PRODUCT CATALOGUE</h2>
 
-        <div className="cb-filters">
-          <label className="cb-filter">
-            <span>Category</span>
+        <div className="catalogue-controls">
+          <div className="control">
+            <label>Category</label>
             <select
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-              disabled={loadingLists}
+              value={selectedCategoryId}
+              onChange={(e) => setSelectedCategoryId(e.target.value)}
             >
               <option value="all">All</option>
               {categories.map((c) => (
-                <option key={c.id} value={String(c.id)}>
+                <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
             </select>
-          </label>
+          </div>
 
-          <label className="cb-filter">
-            <span>Brand</span>
-            <select
-              value={brandId}
-              onChange={(e) => setBrandId(e.target.value)}
-              disabled={loadingLists}
-            >
+          <div className="control">
+            <label>Brand</label>
+            <select value={selectedBrandId} onChange={(e) => setSelectedBrandId(e.target.value)}>
               <option value="all">All</option>
               {brands.map((b) => (
-                <option key={b.id} value={String(b.id)}>
+                <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
               ))}
             </select>
-          </label>
+          </div>
 
-          <label className="cb-filter cb-filter-search">
-            <span>Search</span>
+          <div className="control search">
+            <label>Search</label>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name, SKU, description…"
+              placeholder="Search by name, SKU, description..."
             />
-          </label>
-        </div>
-
-        <div className="cb-meta">
-          <span>
-            Browsing{" "}
-            <strong>
-              {categoryId === "all"
-                ? "All"
-                : categories.find((c) => String(c.id) === String(categoryId))
-                    ?.name || "Category"}{" "}
-              /{" "}
-              {brandId === "all"
-                ? "All"
-                : brands.find((b) => String(b.id) === String(brandId))?.name ||
-                  "Brand"}
-            </strong>{" "}
-            ({totalCount} products)
-          </span>
-        </div>
-
-        {error && (
-          <div className="cb-error">
-            <strong>{error.title}</strong>
-            <div>{error.detail}</div>
           </div>
-        )}
+        </div>
+
+        <div className="catalogue-meta">
+          <div>
+            Browsing <strong>{browsingLabel}</strong> ({totalCount} products found)
+          </div>
+
+          <div className="catalogue-telemetry">
+            Images: Loaded <strong>{imgLoaded}</strong> | Errored{" "}
+            <strong>{imgErrored}</strong> | Placeholder <strong>{imgPlaceholder}</strong>
+          </div>
+
+          <button
+            type="button"
+            className="catalogue-admin-toggle"
+            onClick={() => setShowHealth((v) => !v)}
+          >
+            {showHealth ? "Hide" : "Show"} Image Health
+          </button>
+        </div>
+
+        {loadError ? <div className="catalogue-error">Error: {loadError}</div> : null}
       </div>
 
-      {/* Products Grid */}
-      <div className="cb-grid">
-        {loadingProducts
-          ? Array.from({ length: 12 }).map((_, i) => (
-              <div key={i} className="product-card cb-skeleton-card">
-                <div className="product-card-image cb-skeleton" />
-                <div className="cb-skeleton-lines">
-                  <div className="cb-skeleton line" />
-                  <div className="cb-skeleton line short" />
-                </div>
+      {showHealth ? (
+        <div className="catalogue-health">
+          <h3>Image Health Checks (Client-side)</h3>
+          <p>
+            If these URLs fail (403/404), the site will show placeholders. If you see lots of 403s,
+            you must host images in your own storage (Supabase Storage/CDN) rather than the vendor
+            domain.
+          </p>
+
+          <div className="health-summary">
+            <div>Total products on page: {products.length}</div>
+            <div>Broken images detected: {brokenImages.length}</div>
+          </div>
+
+          {brokenImages.length === 0 ? (
+            <div className="health-ok">No broken images detected on this page load.</div>
+          ) : (
+            <div className="health-table">
+              <div className="health-row head">
+                <div>SKU</div>
+                <div>Name</div>
+                <div>Image URL</div>
+                <div>Reason</div>
               </div>
-            ))
-          : products.map((p) => (
-              <article key={p.id} className="product-card">
+              {brokenImages.map((x) => (
+                <div className="health-row" key={x.id}>
+                  <div>{x.sku}</div>
+                  <div>{x.name}</div>
+                  <div className="url">{x.image_url || "(empty)"}</div>
+                  <div>{x.reason}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* Grid */}
+      <div className="product-grid">
+        {loading ? (
+          Array.from({ length: PAGE_SIZE }).map((_, idx) => (
+            <div className="product-card skeleton" key={idx}>
+              <div className="product-card-image skeleton-box" />
+              <div className="skeleton-line" />
+              <div className="skeleton-line short" />
+              <div className="skeleton-line" />
+            </div>
+          ))
+        ) : products.length === 0 ? (
+          <div className="catalogue-empty">No products match your filters.</div>
+        ) : (
+          products.map((p) => {
+            const imgSrc = hasRealImage(p.image_url) ? p.image_url : PLACEHOLDER_SRC;
+
+            return (
+              <div className="product-card" key={p.id}>
                 <div className="product-card-image">
                   <img
-                    src={resolveImageUrl(p)}
-                    alt={p?.name || "Product image"}
+                    src={imgSrc}
+                    alt={p.name || p.sku || "Product image"}
                     loading="lazy"
-                    onLoad={handleImgLoad}
-                    onError={handleImgError}
+                    onLoad={onImgLoad}
+                    onError={(e) => onImgError(p, e)}
                   />
                 </div>
 
                 <div className="product-card-body">
-                  <h3 className="product-card-title">{p?.name}</h3>
-
-                  <div className="product-card-sku">
-                    <strong>SKU:</strong> {p?.sku || "-"}
-                  </div>
-
-                  {safeTrim(p?.description) ? (
-                    <p className="product-card-desc">{p.description}</p>
-                  ) : null}
+                  <div className="product-title">{p.name}</div>
+                  <div className="product-sku">{p.sku}</div>
+                  <div className="product-desc">{p.description || ""}</div>
                 </div>
-              </article>
-            ))}
-
-        {!loadingProducts && !error && products.length === 0 && (
-          <div className="cb-empty">
-            No products matched your filters/search.
-          </div>
+              </div>
+            );
+          })
         )}
       </div>
 
       {/* Pagination */}
-      <div className="cb-pagination">
-        <button onClick={goPrev} disabled={page <= 1 || loadingProducts}>
+      <div className="catalogue-pagination">
+        <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
           Prev
         </button>
 
-        <span>
+        <div>
           Page <strong>{page}</strong> of <strong>{totalPages}</strong>
-        </span>
+        </div>
 
         <button
-          onClick={goNext}
-          disabled={page >= totalPages || loadingProducts}
+          type="button"
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page >= totalPages}
         >
           Next
         </button>
       </div>
-
-      {/* Optional telemetry block (safe, can remove later) */}
-      <div className="cb-telemetry">
-        Images: Attempted {imageTelemetry.attempted} / Loaded{" "}
-        {imageTelemetry.loaded} / Errors {imageTelemetry.errored} / Fallback{" "}
-        {imageTelemetry.fallbackApplied}
-      </div>
     </section>
   );
 }
-
-/**
- * Minimal CSS expectations:
- * - You already have .product-card-image and .product-card-image img in Product-card.css
- * - If you do not have the cb-* classes, add them to your main stylesheet,
- *   or remove the cb-* wrappers and keep only product-card classes.
- */
